@@ -6,6 +6,5 @@ A Kubernetes scheduler plugin using Graph Neural Networks and Multi-Agent Reinfo
 
 A production K8s scheduler that replaces the default scheduler with a GNN+MARL policy that understands pod dependency topology.
 
-#Progress
--[x] Day 1: Environment setup
-
+## Progress
+- [x] Day 1: Environment setup — installed kind, kubectl, docker, python deps
