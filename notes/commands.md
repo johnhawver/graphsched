@@ -13,3 +13,6 @@ kubectl delete pod watcher-test
 # Check current kubectl context
 kubectl config current-context
 
+
+# Python virtual environment
+python3 -m venv .venv          # create isolated Python env for this project
