@@ -16,3 +16,8 @@ kubectl config current-context
 
 # Python virtual environment
 python3 -m venv .venv          # create isolated Python env for this project
+
+# Python virtual environment
+python3 -m venv .venv          # create isolated Python env for this project
+source .venv/bin/activate      # activate it
+deactivate                     # exit the venv when done
