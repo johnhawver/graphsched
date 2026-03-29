@@ -1,0 +1,27 @@
+syntax = "proto3";
+package graphsched;
+
+service GraphService {
+  rpc GetGraphStats(StatsRequest) returns (StatsResponse);
+  rpc GetGraphEdges(EdgesRequest) returns (EdgesResponse);
+}
+
+message StatsRequest {}
+
+message StatsResponse {
+  int32 num_pods = 1;
+  int32 num_dependencies = 2;
+}
+
+message EdgesRequest {}
+
+message EdgeProto {
+  string source_uid = 1;
+  string target_uid = 2;
+  string dep_type = 3;
+  float weight = 4;
+}
+
+message EdgesResponse {
+  repeated EdgeProto edges = 1;
+}
