@@ -91,6 +91,8 @@ class PodWatcher:
                     if event_type in ('ADDED', 'MODIFIED'):
                         node = pod_to_node(pod)
                         self.graph.add_or_update_pod(node)
+                        if node.phase == "Running" and node.node_name and self.service_watcher:
+                            self.service_watcher.refresh_dependencies()
                         log.debug(f"Updated pod {pod.metadata.namespace}/"
                                   f"{pod.metadata.name} (phase={node.phase})")
 

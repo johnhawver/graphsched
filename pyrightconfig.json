@@ -1,1 +1,5 @@
-{"include": ["./"]}
+{
+  "pythonPath": "/home/johnh/graphsched/.venv/bin/python",
+  "extraPaths": ["/home/johnh/graphsched"],
+  "include": ["."]
+}

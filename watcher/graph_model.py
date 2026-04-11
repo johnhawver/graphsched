@@ -66,8 +66,7 @@ class PodDependencyGraph:
 
     def add_dependency(self, edge: DependencyEdge):
         with self._lock:
-            if (self.graph.has_node(edge.source_uid) and
-                    self.graph.has_node(edge.target_uid)):
+            if edge.source_uid != edge.target_uid:
                 self.graph.add_edge(edge.source_uid, edge.target_uid,
                                     dep_type=edge.dep_type,
                                     weight=edge.weight)

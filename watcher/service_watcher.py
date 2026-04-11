@@ -98,3 +98,17 @@ class ServiceWatcher:
             except Exception as e:
                 log.error(f"ServiceWatcher error (will retry): {e}")
                 import time; time.sleep(2)
+
+    def refresh_dependencies(self):
+        """Re-infer all edges from currently known services. Call when new pods arrive."""
+        try:
+            svc_list = self.v1.list_service_for_all_namespaces()
+            for svc in svc_list.items:
+                if svc.metadata.namespace == "kube-system":
+                    continue
+                self._infer_dependencies_for_service(
+                    svc.spec.selector or {},
+                    svc.metadata.name,
+                    svc.metadata.namespace)
+        except Exception as e:
+            log.error(f"refresh_dependencies error: {e}")
