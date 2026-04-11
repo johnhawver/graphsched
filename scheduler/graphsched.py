@@ -1,13 +1,15 @@
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from kubernetes import client, config, watch
 from watcher.graph_watcher import GraphWatcher
+from watcher.service_watcher import labels_match_selector, pod_references_service
 from scheduler.topology_scorer import compute_node_score
 
 log = logging.getLogger(__name__)
 
 SCHEDULER_NAME = "graphsched"
+_SERVICES_CACHE_TTL = 2.0
+_PODS_CACHE_TTL = 0.15  # 150ms — safe because _bound_pods covers the staleness gap
 
 
 class GraphSchedPlugin:
@@ -19,13 +21,14 @@ class GraphSchedPlugin:
         log.info("GraphSched started. Waiting 8s for graph to populate...")
         time.sleep(8)
 
-        # Cache node capacity — allocatable resources don't change at runtime
         self._node_capacity: dict[str, dict] = {}
         self._cache_node_capacity()
 
-        # Track pods we've already bound so uid_to_node is accurate
-        # even before K8s transitions them to Running
         self._bound_pods: dict[str, str] = {}  # uid -> node_name
+        self._cached_services: list | None = None
+        self._services_fetched_at: float = 0.0
+        self._cached_pods: list | None = None
+        self._pods_fetched_at: float = 0.0
 
     def _cache_node_capacity(self):
         """Fetch and cache CPU/memory capacity for all worker nodes once."""
@@ -59,24 +62,6 @@ class GraphSchedPlugin:
                 return int(s[:-len(suf)]) * m
         return int(s) if s.isdigit() else 0
 
-    def get_node_resource_usage(self, node_name: str) -> dict:
-        """Get current CPU/memory used on a node by summing Running pod requests.
-        
-        Node capacity is served from cache — only pod usage requires a live API call.
-        """
-        capacity = self._node_capacity[node_name]
-
-        running = self.v1.list_pod_for_all_namespaces(
-            field_selector=f"spec.nodeName={node_name},status.phase=Running")
-        cpu_used = mem_used = 0
-        for pod in running.items:
-            for c in (pod.spec.containers or []):
-                reqs = (c.resources.requests or {}) if c.resources else {}
-                cpu_used += self._parse_cpu(reqs.get("cpu", "0"))
-                mem_used += self._parse_memory(reqs.get("memory", "0"))
-
-        return dict(cpu_used=cpu_used, mem_used=mem_used, **capacity)
-
     def _get_pod_requests(self, pod) -> tuple[int, int]:
         cpu = sum(
             self._parse_cpu((c.resources.requests or {}).get("cpu", "0"))
@@ -88,77 +73,100 @@ class GraphSchedPlugin:
             for c in (pod.spec.containers or []))
         return cpu, mem
 
-    def _score_node(self, node_name: str, pod_uid: str, pod_cpu: int, pod_mem: int,
-                    graph, uid_to_node: dict) -> tuple[str, int] | None:
-        """
-        Score a single node. Returns (node_name, score) or None if filtered out.
-        Designed to run in a thread — each call makes exactly 1 API request.
-        """
-        usage = self.get_node_resource_usage(node_name)
+    def _get_services(self) -> list:
+        """Return non-system services, cached for _SERVICES_CACHE_TTL seconds."""
+        now = time.monotonic()
+        if self._cached_services is None or now - self._services_fetched_at > _SERVICES_CACHE_TTL:
+            svc_list = self.v1.list_service_for_all_namespaces()
+            self._cached_services = [
+                s for s in svc_list.items
+                if s.metadata.namespace != "kube-system"
+            ]
+            self._services_fetched_at = now
+        return self._cached_services
 
-        # FILTER: skip nodes that cannot physically fit this pod
-        if (usage["cpu_used"] + pod_cpu > usage["cpu_total"] or
-                usage["mem_used"] + pod_mem > usage["mem_total"]):
-            log.debug(f"Filtered {node_name}: insufficient resources")
-            return None
+    def _get_pods(self) -> list:
+        """Return all pods cluster-wide, cached for _PODS_CACHE_TTL seconds.
 
-        score = compute_node_score(
-            pod_uid=pod_uid,
-            node_name=node_name,
-            graph=graph,
-            uid_to_node=uid_to_node,
-            **usage
-        )
-        log.info(f"node_score({node_name}) = {score}")
-        return (node_name, score)
+        Safe to cache briefly because _bound_pods covers the gap for pods
+        we just placed that the cached list doesn't yet reflect.
+        """
+        now = time.monotonic()
+        if self._cached_pods is None or now - self._pods_fetched_at > _PODS_CACHE_TTL:
+            self._cached_pods = self.v1.list_pod_for_all_namespaces().items
+            self._pods_fetched_at = now
+        return self._cached_pods
 
     def filter_and_score(self, pod) -> str:
-        # Eagerly re-infer all service dependencies so the graph has edges
-        # BEFORE scoring.  The background ServiceWatcher may not have
-        # processed the Service events yet when pods arrive for scheduling.
-        self.graph_watcher.refresh_dependencies()
-
         graph = self.graph_watcher.get_graph()
+
+        all_pods = self._get_pods()
+
+        # --- Inline dependency inference on the snapshot ---
+        # Services are cached (rarely change mid-batch); pods are fresh.
+        for svc in self._get_services():
+            selector = svc.spec.selector or {}
+            if not selector:
+                continue
+            svc_name = svc.metadata.name
+            svc_ns = svc.metadata.namespace
+            target_uids = [
+                p.metadata.uid for p in all_pods
+                if p.metadata.namespace == svc_ns
+                and labels_match_selector(p.metadata.labels or {}, selector)
+            ]
+            caller_uids = [
+                p.metadata.uid for p in all_pods
+                if pod_references_service(p, svc_name, svc_ns)
+            ]
+            for caller_uid in caller_uids:
+                for target_uid in target_uids:
+                    if caller_uid != target_uid:
+                        graph.add_edge(caller_uid, target_uid,
+                                       dep_type="network", weight=1.0)
+
         log.info(f"Graph state: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
         pod_cpu, pod_mem = self._get_pod_requests(pod)
 
-        # Build uid_to_node from three sources (each covers a different lag):
-        #   1. Locally tracked bindings (covers just-bound, not yet Running)
-        #   2. Graph node data       (covers pods the PodWatcher has seen)
-        #   3. Live Running pod list  (authoritative for Running pods)
+        # Build uid_to_node from locally tracked bindings, graph data, and live pods
         uid_to_node: dict[str, str] = dict(self._bound_pods)
-
         for uid, data in graph.nodes(data=True):
-            node = data.get("node_name")
-            if node:
-                uid_to_node[data.get("uid", uid)] = node
-
-        running_pods = self.v1.list_namespaced_pod(
-            namespace="default",
-            field_selector="status.phase=Running"
-        )
-        for p in running_pods.items:
-            if p.metadata.uid and p.spec.node_name:
+            nn = data.get("node_name")
+            if nn:
+                uid_to_node[data.get("uid", uid)] = nn
+        for p in all_pods:
+            if p.status.phase == "Running" and p.metadata.uid and p.spec.node_name:
                 uid_to_node[p.metadata.uid] = p.spec.node_name
 
-        node_names = list(self._node_capacity.keys())
-        best_node, best_score = None, -1
+        # Pre-compute per-node resource usage from the same pod list
+        node_usage: dict[str, dict] = {
+            name: {"cpu_used": 0, "mem_used": 0, **cap}
+            for name, cap in self._node_capacity.items()
+        }
+        for p in all_pods:
+            if p.status.phase != "Running":
+                continue
+            nn = p.spec.node_name
+            if nn not in node_usage:
+                continue
+            for c in (p.spec.containers or []):
+                reqs = (c.resources.requests or {}) if c.resources else {}
+                node_usage[nn]["cpu_used"] += self._parse_cpu(reqs.get("cpu", "0"))
+                node_usage[nn]["mem_used"] += self._parse_memory(reqs.get("memory", "0"))
 
-        with ThreadPoolExecutor(max_workers=len(node_names)) as executor:
-            futures = {
-                executor.submit(
-                    self._score_node,
-                    name, pod.metadata.uid, pod_cpu, pod_mem, graph, uid_to_node
-                ): name
-                for name in node_names
-            }
-            for future in as_completed(futures):
-                result = future.result()
-                if result is None:
-                    continue
-                node_name, score = result
-                if score > best_score:
-                    best_score, best_node = score, node_name
+        # Score all nodes — pure computation, no API calls
+        best_node, best_score = None, -1
+        for name in self._node_capacity:
+            usage = node_usage[name]
+            if (usage["cpu_used"] + pod_cpu > usage["cpu_total"] or
+                    usage["mem_used"] + pod_mem > usage["mem_total"]):
+                continue
+            score = compute_node_score(
+                pod_uid=pod.metadata.uid, node_name=name,
+                graph=graph, uid_to_node=uid_to_node, **usage)
+            log.info(f"node_score({name}) = {score}")
+            if score > best_score:
+                best_score, best_node = score, name
 
         if best_node is None:
             raise RuntimeError(f"No eligible nodes for pod {pod.metadata.name}")

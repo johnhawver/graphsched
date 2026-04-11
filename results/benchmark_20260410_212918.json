@@ -1,0 +1,22 @@
+[
+  {
+    "scheduler": "default-scheduler",
+    "scheduled": 5,
+    "failed": 0,
+    "p50_latency_ms": 963.3,
+    "p99_latency_ms": 972.7,
+    "co_location_rate": 0.0,
+    "co_located_pairs": 0,
+    "total_dependent_pairs": 6
+  },
+  {
+    "scheduler": "graphsched",
+    "scheduled": 5,
+    "failed": 0,
+    "p50_latency_ms": 327.1,
+    "p99_latency_ms": 342.6,
+    "co_location_rate": 1.0,
+    "co_located_pairs": 6,
+    "total_dependent_pairs": 6
+  }
+]
