@@ -1,3 +1,5 @@
 venv/
 __pycache__/
 .venv/
+results/*.json
+!results/benchmark_20260410_212918.json
