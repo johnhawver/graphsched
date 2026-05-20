@@ -1,11 +1,18 @@
-import time
-import json
+import argparse
 import datetime
-import subprocess
-import tempfile
-import os
+import json
 import logging
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
 from kubernetes import client, config, watch
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 log = logging.getLogger(__name__)
 
@@ -120,7 +127,28 @@ spec:
 """
 
 
-from kubernetes import watch
+SCHEDULER_NAMES = {
+    "default": "default-scheduler",
+    "graphsched": "graphsched",
+}
+
+
+def start_graphsched_process() -> subprocess.Popen:
+    log.info("Starting GraphSched background process...")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{env.get('PYTHONPATH', '')}:."
+    return subprocess.Popen(
+        ["python3", "scheduler/graphsched.py"],
+        env=env,
+        preexec_fn=os.setsid,
+    )
+
+
+def stop_graphsched_process(proc: subprocess.Popen) -> None:
+    log.info("Shutting down GraphSched...")
+    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    proc.wait()
+
 
 def wait_for_pods_scheduled(v1: client.CoreV1Api,
                             label_selector: str,
@@ -235,51 +263,54 @@ def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str) -> dict:
     return result
 
 
-import signal
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    config.load_kube_config()
-    v1 = client.CoreV1Api()
-    os.makedirs("results", exist_ok=True)
-
-    results = []
-    
-    # Test Default Scheduler
-    results.append(run_for_scheduler(v1, "default-scheduler"))
-
-    # Test GraphSched with Auto-Start
-    print("\nStarting GraphSched background process...")
-    my_env = os.environ.copy()
-    my_env["PYTHONPATH"] = f"{my_env.get('PYTHONPATH', '')}:."
-    
-    # Start the scheduler process
-    sched_proc = subprocess.Popen(
-        ["python3", "scheduler/graphsched.py"],
-        env=my_env,
-        preexec_fn=os.setsid 
-    )
-    
-    try:
-        # Give the scheduler time to connect to the cluster
-        time.sleep(10) 
-        results.append(run_for_scheduler(v1, "graphsched"))
-    finally:
-        # Kill the scheduler process group
-        print("Shutting down GraphSched...")
-        os.killpg(os.getpgid(sched_proc.pid), signal.SIGTERM)
-        sched_proc.wait()
-
-    # Results
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    outfile = f"results/benchmark_{ts}.json"
-    with open(outfile, "w") as f:
-        json.dump(results, f, indent=2)
-
+def print_summary(result: dict, outfile: str) -> None:
     print(f"\n{'='*70}")
     print(f"{'Scheduler':<25} {'Sched':>6} {'P99ms':>8} {'Co-loc Rate':>14}")
     print(f"{'='*70}")
-    for r in results:
-        print(f"{r['scheduler']:<25} {r['scheduled']:>6} "
-              f"{r['p99_latency_ms']:>8.1f} {r['co_location_rate']:>14.3f}")
+    print(f"{result['scheduler']:<25} {result['scheduled']:>6} "
+          f"{result['p99_latency_ms']:>8.1f} {result['co_location_rate']:>14.3f}")
     print(f"\nFull results saved to: {outfile}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run GraphSched benchmark workload")
+    parser.add_argument(
+        "--scheduler",
+        required=True,
+        choices=["default", "graphsched"],
+        help="Scheduler to benchmark: default (kube-scheduler) or graphsched",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output JSON path (default: results/<scheduler>.json)",
+    )
+    args = parser.parse_args()
+
+    outfile = args.output or f"results/{args.scheduler}.json"
+    scheduler_name = SCHEDULER_NAMES[args.scheduler]
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    config.load_kube_config()
+    v1 = client.CoreV1Api()
+    os.makedirs(os.path.dirname(outfile) or ".", exist_ok=True)
+
+    sched_proc = None
+    if args.scheduler == "graphsched":
+        sched_proc = start_graphsched_process()
+        time.sleep(10)
+
+    try:
+        result = run_for_scheduler(v1, scheduler_name)
+    finally:
+        if sched_proc is not None:
+            stop_graphsched_process(sched_proc)
+
+    with open(outfile, "w") as f:
+        json.dump(result, f, indent=2)
+
+    print_summary(result, outfile)
+
+
+if __name__ == "__main__":
+    main()
