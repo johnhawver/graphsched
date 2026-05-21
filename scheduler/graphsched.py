@@ -1,6 +1,7 @@
 import logging
 import time
 from kubernetes import client, config, watch
+from kubernetes.client.rest import ApiException
 from watcher.graph_watcher import GraphWatcher
 from watcher.service_watcher import labels_match_selector, pod_references_service
 from scheduler.topology_scorer import compute_node_score
@@ -199,8 +200,13 @@ class GraphSchedPlugin:
                 node = self.filter_and_score(pod)
                 self.bind(pod.metadata.name, pod.metadata.namespace, node)
                 self._bound_pods[pod.metadata.uid] = node
+            except ApiException as e:
+                if e.status == 404:
+                    log.debug("Pod %s deleted before bind, skipping", pod.metadata.name)
+                else:
+                    log.error("Scheduling error for %s: %s", pod.metadata.name, e)
             except Exception as e:
-                log.error(f"Scheduling error for {pod.metadata.name}: {e}")
+                log.error("Scheduling error for %s: %s", pod.metadata.name, e)
 
 
 if __name__ == "__main__":

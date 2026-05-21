@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -198,15 +199,35 @@ def wait_for_pods_scheduled(v1: client.CoreV1Api,
     }
 
 
-def cleanup():
-    subprocess.run(["kubectl", "delete", "all,svc", "-l", "benchmark=true", "--force", "--grace-period=0"], capture_output=True)
-    time.sleep(5)
+def _benchmark_pods_remaining() -> bool:
+    result = subprocess.run(
+        ["kubectl", "get", "pods", "-l", "benchmark=true", "--no-headers"],
+        capture_output=True,
+        text=True,
+    )
+    return bool(result.stdout.strip())
+
+
+def cleanup(timeout: float = 60.0) -> None:
+    log.info("Cleaning up benchmark resources...")
+    subprocess.run(
+        ["kubectl", "delete", "all,svc", "-l", "benchmark=true", "--force", "--grace-period=0"],
+        capture_output=True,
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _benchmark_pods_remaining():
+            log.info("Benchmark pods cleared")
+            return
+        time.sleep(2)
+    log.warning("Timed out after %.0fs waiting for benchmark pods to terminate", timeout)
 
 
 import threading
 
 def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str) -> dict:
     log.info(f"\n{'='*50}\nBenchmarking: {scheduler_name}\n{'='*50}")
+    cleanup()
 
     manifest = WORKLOAD_TEMPLATE.replace("{SCHEDULER}", scheduler_name)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -259,7 +280,6 @@ def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str) -> dict:
     }
 
     log.info(f"Result: {result}")
-    cleanup()
     return result
 
 
@@ -285,12 +305,21 @@ def main() -> None:
         default=None,
         help="Output JSON path (default: results/<scheduler>.json)",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible runs (optional)",
+    )
     args = parser.parse_args()
 
     outfile = args.output or f"results/{args.scheduler}.json"
     scheduler_name = SCHEDULER_NAMES[args.scheduler]
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    if args.seed is not None:
+        random.seed(args.seed)
+        log.info("Random seed set to %s", args.seed)
     config.load_kube_config()
     v1 = client.CoreV1Api()
     os.makedirs(os.path.dirname(outfile) or ".", exist_ok=True)
@@ -305,6 +334,7 @@ def main() -> None:
     finally:
         if sched_proc is not None:
             stop_graphsched_process(sched_proc)
+        cleanup()
 
     with open(outfile, "w") as f:
         json.dump(result, f, indent=2)
