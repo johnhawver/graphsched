@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bench-hub-svc
+  labels:
+    benchmark: "true"
+spec:
+  selector:
+    app: bench-hub
+  ports:
+  - port: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-hub
+  labels:
+    benchmark: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bench-hub
+  template:
+    metadata:
+      labels:
+        app: bench-hub
+        benchmark: "true"
+    spec:
+      schedulerName: SCHEDULER_PLACEHOLDER
+      containers:
+      - name: hub
+        image: nginx
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-spoke
+  labels:
+    benchmark: "true"
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: bench-spoke
+  template:
+    metadata:
+      labels:
+        app: bench-spoke
+        benchmark: "true"
+    spec:
+      schedulerName: SCHEDULER_PLACEHOLDER
+      containers:
+      - name: spoke
+        image: nginx
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        env:
+        - name: HUB_URL
+          value: "http://bench-hub-svc"

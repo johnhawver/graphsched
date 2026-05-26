@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bench-db-svc
+  labels:
+    benchmark: "true"
+spec:
+  selector:
+    app: bench-db
+  ports:
+  - port: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bench-backend-svc
+  labels:
+    benchmark: "true"
+spec:
+  selector:
+    app: bench-backend
+  ports:
+  - port: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-db
+  labels:
+    benchmark: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bench-db
+  template:
+    metadata:
+      labels:
+        app: bench-db
+        benchmark: "true"
+    spec:
+      schedulerName: SCHEDULER_PLACEHOLDER
+      containers:
+      - name: db
+        image: nginx
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-backend
+  labels:
+    benchmark: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bench-backend
+  template:
+    metadata:
+      labels:
+        app: bench-backend
+        benchmark: "true"
+    spec:
+      schedulerName: SCHEDULER_PLACEHOLDER
+      containers:
+      - name: backend
+        image: nginx
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        env:
+        - name: DB_URL
+          value: "http://bench-db-svc"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bench-frontend
+  labels:
+    benchmark: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bench-frontend
+  template:
+    metadata:
+      labels:
+        app: bench-frontend
+        benchmark: "true"
+    spec:
+      schedulerName: SCHEDULER_PLACEHOLDER
+      containers:
+      - name: frontend
+        image: nginx
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        env:
+        - name: BACKEND_URL
+          value: "http://bench-backend-svc"

@@ -17,121 +17,24 @@ if _REPO_ROOT not in sys.path:
 
 log = logging.getLogger(__name__)
 
-WORKLOAD_TEMPLATE = """
-apiVersion: v1
-kind: Service
-metadata:
-  name: bench-db-svc
-  labels:
-    benchmark: "true"
-spec:
-  selector:
-    app: bench-db
-  ports:
-  - port: 5432
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: bench-backend-svc
-  labels:
-    benchmark: "true"
-spec:
-  selector:
-    app: bench-backend
-  ports:
-  - port: 8080
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: bench-db
-  labels:
-    benchmark: "true"
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: bench-db
-  template:
-    metadata:
-      labels:
-        app: bench-db
-        benchmark: "true"
-    spec:
-      schedulerName: {SCHEDULER}
-      containers:
-      - name: db
-        image: nginx
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: bench-backend
-  labels:
-    benchmark: "true"
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: bench-backend
-  template:
-    metadata:
-      labels:
-        app: bench-backend
-        benchmark: "true"
-    spec:
-      schedulerName: {SCHEDULER}
-      containers:
-      - name: backend
-        image: nginx
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-        env:
-        - name: DB_URL
-          value: "http://bench-db-svc"
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: bench-frontend
-  labels:
-    benchmark: "true"
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: bench-frontend
-  template:
-    metadata:
-      labels:
-        app: bench-frontend
-        benchmark: "true"
-    spec:
-      schedulerName: {SCHEDULER}
-      containers:
-      - name: frontend
-        image: nginx
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-        env:
-        - name: BACKEND_URL
-          value: "http://bench-backend-svc"
-"""
-
+WORKLOADS_DIR = os.path.join(os.path.dirname(__file__), "workloads")
+SCHEDULER_PLACEHOLDER = "SCHEDULER_PLACEHOLDER"
 
 SCHEDULER_NAMES = {
     "default": "default-scheduler",
     "graphsched": "graphsched",
 }
+
+EXPECTED_PODS = {
+    "chain": 5,
+    "hub": 5,
+}
+
+
+def load_workload_manifest(workload: str, scheduler_name: str) -> str:
+    path = os.path.join(WORKLOADS_DIR, f"{workload}.yaml")
+    with open(path, encoding="utf-8") as f:
+        return f.read().replace(SCHEDULER_PLACEHOLDER, scheduler_name)
 
 
 def start_graphsched_process() -> subprocess.Popen:
@@ -156,8 +59,8 @@ def wait_for_pods_scheduled(v1: client.CoreV1Api,
                             expected: int,
                             timeout: float = 90.0,
                             resource_version: str = "0") -> dict:
+    seen_uids: set[str] = set()
     latencies = []
-    failed = 0
     scheduled_count = 0
 
     w = watch.Watch()
@@ -172,6 +75,11 @@ def wait_for_pods_scheduled(v1: client.CoreV1Api,
             pod = event['object']
 
             if pod.spec.node_name and event['type'] in ('ADDED', 'MODIFIED'):
+                uid = pod.metadata.uid
+                if uid in seen_uids:
+                    continue
+                seen_uids.add(uid)
+
                 creation_ts = pod.metadata.creation_timestamp.timestamp()
                 now = datetime.datetime.now(datetime.timezone.utc).timestamp()
                 latency = (now - creation_ts) * 1000
@@ -188,13 +96,25 @@ def wait_for_pods_scheduled(v1: client.CoreV1Api,
     finally:
         w.stop()
 
+    failed = expected - scheduled_count
+    if scheduled_count + failed != expected:
+        log.warning(
+            "Expected %s pods total, scheduled=%s failed=%s",
+            expected, scheduled_count, failed,
+        )
+    if len(latencies) > expected:
+        log.warning(
+            "Got %s latency samples (expected at most %s); duplicate counting?",
+            len(latencies), expected,
+        )
+
     import statistics
     latencies.sort()
     return {
         "latencies_ms": latencies,
         "p50_ms": statistics.median(latencies) if latencies else -1,
         "p99_ms": latencies[max(0, int(len(latencies) * 0.99) - 1)] if latencies else -1,
-        "failed": expected - scheduled_count,
+        "failed": failed,
         "scheduled": scheduled_count,
     }
 
@@ -225,11 +145,12 @@ def cleanup(timeout: float = 60.0) -> None:
 
 import threading
 
-def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str) -> dict:
-    log.info(f"\n{'='*50}\nBenchmarking: {scheduler_name}\n{'='*50}")
+def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str, workload: str) -> dict:
+    expected = EXPECTED_PODS[workload]
+    log.info(f"\n{'='*50}\nBenchmarking: {scheduler_name} ({workload}, {expected} pods)\n{'='*50}")
     cleanup()
 
-    manifest = WORKLOAD_TEMPLATE.replace("{SCHEDULER}", scheduler_name)
+    manifest = load_workload_manifest(workload, scheduler_name)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         f.write(manifest)
         fname = f.name
@@ -250,7 +171,7 @@ def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str) -> dict:
     def watch_task():
         nonlocal latency_stats
         latency_stats = wait_for_pods_scheduled(
-            v1, "benchmark=true", expected=5, timeout=60.0, resource_version=rv)
+            v1, "benchmark=true", expected=expected, timeout=60.0, resource_version=rv)
 
     timer_thread = threading.Thread(target=watch_task)
     timer_thread.start()
@@ -269,9 +190,10 @@ def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str) -> dict:
     coloc = measure_colocation_rate(watcher.get_graph(), v1)
 
     result = {
+        "workload": workload,
         "scheduler": scheduler_name,
         "scheduled": latency_stats.get("scheduled", 0),
-        "failed": latency_stats.get("failed", 6),
+        "failed": latency_stats.get("failed", expected),
         "p50_latency_ms": round(latency_stats.get("p50_ms", -1), 1),
         "p99_latency_ms": round(latency_stats.get("p99_ms", -1), 1),
         "co_location_rate": round(coloc["co_location_rate"], 3),
@@ -301,9 +223,15 @@ def main() -> None:
         help="Scheduler to benchmark: default (kube-scheduler) or graphsched",
     )
     parser.add_argument(
+        "--workload",
+        choices=["chain", "hub"],
+        default="chain",
+        help="Workload topology: chain (db/backend/frontend) or hub (1 hub + 4 spokes)",
+    )
+    parser.add_argument(
         "--output",
         default=None,
-        help="Output JSON path (default: results/<scheduler>.json)",
+        help="Output JSON path (default: results/<scheduler>_<workload>.json)",
     )
     parser.add_argument(
         "--seed",
@@ -313,7 +241,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    outfile = args.output or f"results/{args.scheduler}.json"
+    outfile = args.output or f"results/{args.scheduler}_{args.workload}.json"
     scheduler_name = SCHEDULER_NAMES[args.scheduler]
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -330,7 +258,7 @@ def main() -> None:
         time.sleep(10)
 
     try:
-        result = run_for_scheduler(v1, scheduler_name)
+        result = run_for_scheduler(v1, scheduler_name, args.workload)
     finally:
         if sched_proc is not None:
             stop_graphsched_process(sched_proc)
