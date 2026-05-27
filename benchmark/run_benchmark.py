@@ -239,7 +239,15 @@ def main() -> None:
         default=None,
         help="Random seed for reproducible runs (optional)",
     )
+    parser.add_argument(
+        "--external-graphsched",
+        action="store_true",
+        help="Do not start/stop GraphSched subprocess; run scheduler in another terminal first",
+    )
     args = parser.parse_args()
+
+    if args.external_graphsched and args.scheduler != "graphsched":
+        parser.error("--external-graphsched only applies with --scheduler graphsched")
 
     outfile = args.output or f"results/{args.scheduler}_{args.workload}.json"
     scheduler_name = SCHEDULER_NAMES[args.scheduler]
@@ -253,7 +261,7 @@ def main() -> None:
     os.makedirs(os.path.dirname(outfile) or ".", exist_ok=True)
 
     sched_proc = None
-    if args.scheduler == "graphsched":
+    if args.scheduler == "graphsched" and not args.external_graphsched:
         sched_proc = start_graphsched_process()
         time.sleep(10)
 

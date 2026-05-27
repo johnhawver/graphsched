@@ -81,3 +81,52 @@ class TestComputeNodeScore:
                                     cpu_used=2000, cpu_total=4000,
                                     mem_used=4294967296, mem_total=8589934592)
         assert 0 <= score <= 100
+
+    def test_score_clipped_0_100(self):
+        g = make_graph_with_edge()
+        uid_to_node = {"backend-uid": "worker1"}
+
+        high = compute_node_score(
+            "frontend-uid", "worker1", g, uid_to_node,
+            cpu_used=0, cpu_total=4000, mem_used=0, mem_total=8589934592,
+        )
+        assert high == 100
+
+        # No co-location on worker2 + fully packed node -> raw 0 -> score 0
+        low = compute_node_score(
+            "frontend-uid", "worker2", g, uid_to_node,
+            cpu_used=4000, cpu_total=4000,
+            mem_used=8589934592, mem_total=8589934592,
+        )
+        assert low == 0
+
+        mid = compute_node_score(
+            "frontend-uid", "worker1", g, {},
+            cpu_used=2000, cpu_total=4000,
+            mem_used=4294967296, mem_total=8589934592,
+        )
+        assert 0 <= mid <= 100
+
+    def test_resource_pressure_can_beat_weak_topology(self):
+        g = make_graph_with_edge()
+        g.add_node("pod-a")
+        g.add_node("pod-b")
+        g.add_node("pod-c")
+        g.add_edge("pod-a", "pod-b", weight=1.0)
+        g.add_edge("pod-a", "pod-c", weight=1.0)
+        # worker1: one neighbor co-located -> topo = 0.5
+        # worker2: both neighbors co-located -> topo = 1.0
+        uid_to_node = {"pod-b": "worker1", "pod-c": "worker2"}
+        # worker1: weaker topology but nearly empty resources
+        score_empty = compute_node_score(
+            "pod-a", "worker1", g, uid_to_node,
+            cpu_used=100, cpu_total=4000,
+            mem_used=100_000_000, mem_total=8589934592,
+        )
+        # worker2: best topology but nearly full -> resource term crushes score
+        score_full = compute_node_score(
+            "pod-a", "worker2", g, uid_to_node,
+            cpu_used=3900, cpu_total=4000,
+            mem_used=8500000000, mem_total=8589934592,
+        )
+        assert score_empty > score_full

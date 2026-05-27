@@ -74,3 +74,6 @@ graphsched                     5   1299.3          1.000
   "co_located_pairs": 1,
   "total_dependent_pairs": 1
 }
+
+5/27/26
+PLACEMENT default/bench-backend-6f97dfc568-8jwsk -> desktop-worker (score=100)

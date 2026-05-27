@@ -172,7 +172,15 @@ class GraphSchedPlugin:
         if best_node is None:
             raise RuntimeError(f"No eligible nodes for pod {pod.metadata.name}")
 
+        log.info(
+            "PLACEMENT %s/%s -> %s (score=%s)",
+            pod.metadata.namespace,
+            pod.metadata.name,
+            best_node,
+            best_score,
+        )
         return best_node
+
 
     def bind(self, pod_name: str, pod_ns: str, node_name: str):
         self.v1.create_namespaced_binding(
