@@ -1,5 +1,13 @@
 import logging
+import os
+import sys
 import time
+
+# Allow `from watcher...` when run as `python3 scheduler/graphsched.py`
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from kubernetes import client, config, watch
 from kubernetes.client.rest import ApiException
 from watcher.graph_watcher import GraphWatcher
@@ -78,12 +86,17 @@ class GraphSchedPlugin:
         """Return non-system services, cached for _SERVICES_CACHE_TTL seconds."""
         now = time.monotonic()
         if self._cached_services is None or now - self._services_fetched_at > _SERVICES_CACHE_TTL:
-            svc_list = self.v1.list_service_for_all_namespaces()
-            self._cached_services = [
-                s for s in svc_list.items
-                if s.metadata.namespace != "kube-system"
-            ]
-            self._services_fetched_at = now
+            try:
+                svc_list = self.v1.list_service_for_all_namespaces()
+                self._cached_services = [
+                    s for s in svc_list.items
+                    if s.metadata.namespace != "kube-system"
+                ]
+                self._services_fetched_at = now
+            except Exception as e:
+                log.warning("list services failed: %s", e)
+                if self._cached_services is None:
+                    raise
         return self._cached_services
 
     def _get_pods(self) -> list:
@@ -94,8 +107,13 @@ class GraphSchedPlugin:
         """
         now = time.monotonic()
         if self._cached_pods is None or now - self._pods_fetched_at > _PODS_CACHE_TTL:
-            self._cached_pods = self.v1.list_pod_for_all_namespaces().items
-            self._pods_fetched_at = now
+            try:
+                self._cached_pods = self.v1.list_pod_for_all_namespaces().items
+                self._pods_fetched_at = now
+            except Exception as e:
+                log.warning("list pods failed: %s", e)
+                if self._cached_pods is None:
+                    raise
         return self._cached_pods
 
     def filter_and_score(self, pod) -> str:
@@ -204,17 +222,48 @@ class GraphSchedPlugin:
                     pod.spec.node_name):
                 continue
 
-            try:
-                node = self.filter_and_score(pod)
-                self.bind(pod.metadata.name, pod.metadata.namespace, node)
-                self._bound_pods[pod.metadata.uid] = node
-            except ApiException as e:
-                if e.status == 404:
-                    log.debug("Pod %s deleted before bind, skipping", pod.metadata.name)
-                else:
-                    log.error("Scheduling error for %s: %s", pod.metadata.name, e)
-            except Exception as e:
-                log.error("Scheduling error for %s: %s", pod.metadata.name, e)
+            for attempt in range(3):
+                try:
+                    node = self.filter_and_score(pod)
+                    self.bind(pod.metadata.name, pod.metadata.namespace, node)
+                    self._bound_pods[pod.metadata.uid] = node
+                    break
+                except ApiException as e:
+                    if e.status == 404:
+                        log.debug(
+                            "Pod %s deleted before bind, skipping",
+                            pod.metadata.name,
+                        )
+                        break
+                    log.error(
+                        "Scheduling error for %s (attempt %d/3): %s",
+                        pod.metadata.name,
+                        attempt + 1,
+                        e,
+                    )
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)
+                    else:
+                        log.error(
+                            "Giving up on %s/%s after 3 attempts",
+                            pod.metadata.namespace,
+                            pod.metadata.name,
+                        )
+                except Exception as e:
+                    log.error(
+                        "Scheduling error for %s (attempt %d/3): %s",
+                        pod.metadata.name,
+                        attempt + 1,
+                        e,
+                    )
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)
+                    else:
+                        log.error(
+                            "Giving up on %s/%s after 3 attempts",
+                            pod.metadata.namespace,
+                            pod.metadata.name,
+                        )
 
 
 if __name__ == "__main__":
