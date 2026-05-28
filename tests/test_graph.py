@@ -1,7 +1,7 @@
 import pytest
 from watcher.graph_model import PodDependencyGraph, PodNode, DependencyEdge
-from watcher.service_watcher import labels_match_selector
-
+from unittest.mock import MagicMock
+from watcher.service_watcher import labels_match_selector, pod_references_service
 
 def make_pod(uid: str, name: str, labels: dict = None) -> PodNode:
     return PodNode(uid=uid, name=name, namespace="default",
@@ -78,3 +78,39 @@ class TestLabelMatching:
 
     def test_empty_labels_no_match(self):
         assert not labels_match_selector({}, {"app": "backend"})
+
+
+class TestServiceReference:
+    """Tests for env-var-based service reference detection."""
+    def _make_pod(self, namespace="default", env_pairs=None):
+        """env_pairs: list of (name, value) tuples."""
+        pod = MagicMock()
+        pod.metadata.namespace = namespace
+        container = MagicMock()
+        container.env = []
+        for name, value in (env_pairs or []):
+            env = MagicMock()
+            env.name = name
+            env.value = value
+            container.env.append(env)
+        pod.spec.containers = [container]
+        return pod
+    def test_env_reference_detected(self):
+        pod = self._make_pod(env_pairs=[
+            ("BACKEND_URL", "http://bench-backend-svc"),
+        ])
+        assert pod_references_service(pod, "bench-backend-svc", "default")
+    def test_unrelated_env_not_detected(self):
+        pod = self._make_pod(env_pairs=[
+            ("FOO", "bar"),
+        ])
+        assert not pod_references_service(pod, "bench-backend-svc", "default")
+    def test_wrong_namespace_not_detected(self):
+        pod = self._make_pod(
+            namespace="other-ns",
+            env_pairs=[("URL", "http://bench-backend-svc")],
+        )
+        assert not pod_references_service(pod, "bench-backend-svc", "default")
+    def test_empty_env_not_detected(self):
+        pod = self._make_pod(env_pairs=[])
+        assert not pod_references_service(pod, "bench-backend-svc", "default")
