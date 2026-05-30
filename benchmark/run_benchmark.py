@@ -15,6 +15,8 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from benchmark.colocation_metric import measure_colocation_rate
+
 log = logging.getLogger(__name__)
 
 WORKLOADS_DIR = os.path.join(os.path.dirname(__file__), "workloads")
@@ -145,6 +147,26 @@ def cleanup(timeout: float = 60.0) -> None:
 
 import threading
 
+def _measure_colocation_when_ready(watcher, v1: client.CoreV1Api,
+                                   timeout: float = 15.0) -> dict:
+    """Refresh graph edges and poll until dependent pairs are measurable."""
+    deadline = time.monotonic() + timeout
+    last = measure_colocation_rate(watcher.get_graph(), v1,
+                                   label_selector="benchmark=true")
+    while time.monotonic() < deadline:
+        watcher.refresh_dependencies()
+        last = measure_colocation_rate(watcher.get_graph(), v1,
+                                       label_selector="benchmark=true")
+        if last["total_dependent_pairs"] > 0:
+            return last
+        time.sleep(0.25)
+    log.warning(
+        "Co-location measurement found 0 dependent pairs after %.0fs",
+        timeout,
+    )
+    return last
+
+
 def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str, workload: str) -> dict:
     expected = EXPECTED_PODS[workload]
     log.info(f"\n{'='*50}\nBenchmarking: {scheduler_name} ({workload}, {expected} pods)\n{'='*50}")
@@ -157,7 +179,6 @@ def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str, workload: str) 
 
     # Start graph watcher early so graph is warm before pods arrive
     from watcher.graph_watcher import GraphWatcher
-    from benchmark.colocation_metric import measure_colocation_rate
     watcher = GraphWatcher()
     watcher.start()
     time.sleep(3)  # let watch streams connect
@@ -186,8 +207,7 @@ def run_for_scheduler(v1: client.CoreV1Api, scheduler_name: str, workload: str) 
     timer_thread.join(timeout=70)
 
     log.info("Analyzing topology co-location...")
-    time.sleep(2)
-    coloc = measure_colocation_rate(watcher.get_graph(), v1)
+    coloc = _measure_colocation_when_ready(watcher, v1, timeout=15.0)
 
     result = {
         "workload": workload,
@@ -263,7 +283,7 @@ def main() -> None:
     sched_proc = None
     if args.scheduler == "graphsched" and not args.external_graphsched:
         sched_proc = start_graphsched_process()
-        time.sleep(10)
+        time.sleep(6)
 
     try:
         result = run_for_scheduler(v1, scheduler_name, args.workload)

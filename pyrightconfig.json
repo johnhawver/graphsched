@@ -1,5 +1,5 @@
 {
-  "pythonPath": "/home/johnh/graphsched/.venv/bin/python",
-  "extraPaths": ["/home/johnh/graphsched"],
+  "pythonPath": "/home/johnh/projects/graphsched/.venv/bin/python",
+  "extraPaths": ["/home/johnh/projects/graphsched"],
   "include": ["."]
 }

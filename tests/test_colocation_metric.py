@@ -49,3 +49,26 @@ def test_empty_graph():
     result = measure_colocation_rate(g, v1)
     assert result["co_location_rate"] == 0.0
     assert result["total_dependent_pairs"] == 0
+
+
+def test_bound_pending_pods_count():
+    """Bound pods count even before containers reach Running phase."""
+    g = nx.DiGraph()
+    g.add_node("uid-1")
+    g.add_node("uid-2")
+    g.add_edge("uid-1", "uid-2")
+
+    bound_pending = MagicMock()
+    bound_pending.metadata.uid = "uid-2"
+    bound_pending.spec.node_name = "worker1"
+    bound_pending.status.phase = "Pending"
+
+    v1 = MagicMock()
+    v1.list_pod_for_all_namespaces.return_value.items = [
+        make_running_pod("uid-1", "worker1"),
+        bound_pending,
+    ]
+
+    result = measure_colocation_rate(g, v1)
+    assert result["co_location_rate"] == 1.0
+    assert result["total_dependent_pairs"] == 1
