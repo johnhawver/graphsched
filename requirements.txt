@@ -1,4 +1,3 @@
 kubernetes
 networkx
-matplotlib
 prometheus_client

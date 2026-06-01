@@ -1,0 +1,11 @@
+{
+  "workload": "hub",
+  "scheduler": "default-scheduler",
+  "scheduled": 5,
+  "failed": 0,
+  "p50_latency_ms": 425.7,
+  "p99_latency_ms": 427.6,
+  "co_location_rate": 0.25,
+  "co_located_pairs": 1,
+  "total_dependent_pairs": 4
+}

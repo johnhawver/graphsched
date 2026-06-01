@@ -1,0 +1,11 @@
+{
+  "workload": "hub",
+  "scheduler": "graphsched",
+  "scheduled": 5,
+  "failed": 0,
+  "p50_latency_ms": 444.1,
+  "p99_latency_ms": 475.9,
+  "co_location_rate": 1.0,
+  "co_located_pairs": 4,
+  "total_dependent_pairs": 4
+}

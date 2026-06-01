@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 results/*.json
 !results/benchmark_20260410_212918.json
+# Keep the committed benchmark matrix so results/final_summary.md is reproducible
+!results/matrix_*.json
 
 # Personal playbook — keep local / OneDrive only, not in repo history
 graphsched_plan.md

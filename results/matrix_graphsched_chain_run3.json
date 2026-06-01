@@ -1,0 +1,11 @@
+{
+  "workload": "chain",
+  "scheduler": "graphsched",
+  "scheduled": 5,
+  "failed": 0,
+  "p50_latency_ms": 998.9,
+  "p99_latency_ms": 1031.9,
+  "co_location_rate": 1.0,
+  "co_located_pairs": 6,
+  "total_dependent_pairs": 6
+}

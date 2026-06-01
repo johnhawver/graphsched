@@ -314,7 +314,6 @@ class GraphSchedPlugin:
                     self._bound_pods[pod_uid] = node
                     self._invalidate_pod_cache()
                     PODS_SCHEDULED.inc()
-                    self._update_colocation_metric()
                     return
                 except ApiException as e:
                     if e.status == 404:
@@ -367,6 +366,9 @@ class GraphSchedPlugin:
             log.info("Batch scheduling %d pending pod(s)", len(ordered))
             for pod in ordered:
                 self._schedule_one_pod(pod)
+            # Update the co-location gauge once per batch, off the per-pod
+            # critical path (keeps API list calls out of the hot loop).
+            self._update_colocation_metric()
 
     def run(self):
         w = watch.Watch()
