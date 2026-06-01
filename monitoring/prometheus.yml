@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: graphsched
+    static_configs:
+      # GraphSched exposes /metrics on the host (WSL) at port 9100.
+      # From a Prometheus container, reach the host via host.docker.internal.
+      # On Linux Docker, run the container with:
+      #   --add-host=host.docker.internal:host-gateway
+      # or replace this target with your WSL IP (hostname -I).
+      - targets: ["host.docker.internal:9100"]
+        labels:
+          service: graphsched

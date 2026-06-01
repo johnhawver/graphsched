@@ -289,7 +289,10 @@ class GraphSchedPlugin:
     def _update_colocation_metric(self) -> None:
         from benchmark.colocation_metric import measure_colocation_rate
 
+        # Infer dependency edges inline (same as filter_and_score) so the gauge
+        # reflects the edges we actually scored on, not the bare watcher graph.
         graph = self.graph_watcher.get_graph()
+        self._infer_network_edges(graph, self._get_pods())
         result = measure_colocation_rate(graph, self.v1)
         COLOCATION_RATE.set(result["co_location_rate"])
 

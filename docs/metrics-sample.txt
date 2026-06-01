@@ -1,0 +1,36 @@
+# GraphSched /metrics sample (captured 2026-06-01 09:29:24)
+# Source: curl -s localhost:9100/metrics | grep graphsched
+# Prometheus scrapes this endpoint every 5s; Grafana dashboard: monitoring/grafana-dashboard.json
+
+# HELP graphsched_schedule_latency_seconds Time spent in filter_and_score for one pod
+# TYPE graphsched_schedule_latency_seconds histogram
+graphsched_schedule_latency_seconds_bucket{le="0.01"} 15.0
+graphsched_schedule_latency_seconds_bucket{le="0.05"} 28.0
+graphsched_schedule_latency_seconds_bucket{le="0.1"} 29.0
+graphsched_schedule_latency_seconds_bucket{le="0.25"} 29.0
+graphsched_schedule_latency_seconds_bucket{le="0.5"} 29.0
+graphsched_schedule_latency_seconds_bucket{le="1.0"} 29.0
+graphsched_schedule_latency_seconds_bucket{le="2.5"} 29.0
+graphsched_schedule_latency_seconds_bucket{le="5.0"} 29.0
+graphsched_schedule_latency_seconds_bucket{le="10.0"} 29.0
+graphsched_schedule_latency_seconds_bucket{le="+Inf"} 29.0
+graphsched_schedule_latency_seconds_count 29.0
+graphsched_schedule_latency_seconds_sum 0.33734925000135263
+# HELP graphsched_schedule_latency_seconds_created Time spent in filter_and_score for one pod
+# TYPE graphsched_schedule_latency_seconds_created gauge
+graphsched_schedule_latency_seconds_created 1.780319288510501e+09
+# HELP graphsched_pods_scheduled_total Pods successfully scheduled and bound
+# TYPE graphsched_pods_scheduled_total counter
+graphsched_pods_scheduled_total 21.0
+# HELP graphsched_pods_scheduled_created Pods successfully scheduled and bound
+# TYPE graphsched_pods_scheduled_created gauge
+graphsched_pods_scheduled_created 1.7803192885105402e+09
+# HELP graphsched_schedule_errors_total Pods that failed scheduling after all retries
+# TYPE graphsched_schedule_errors_total counter
+graphsched_schedule_errors_total 0.0
+# HELP graphsched_schedule_errors_created Pods that failed scheduling after all retries
+# TYPE graphsched_schedule_errors_created gauge
+graphsched_schedule_errors_created 1.7803192885105467e+09
+# HELP graphsched_colocation_rate Fraction of dependent pod pairs on the same node (0.0-1.0)
+# TYPE graphsched_colocation_rate gauge
+graphsched_colocation_rate 0.0
